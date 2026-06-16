@@ -1,0 +1,19 @@
+[Unit]
+Description=StellaVPN Gate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/stella-vpngate
+Environment=VPNGATE_DATA_DIR=/opt/stella-vpngate/data
+Environment=LOCAL_PROXY_HOST=127.0.0.1
+Environment=LOCAL_PROXY_PORT=8888
+Environment=UI_HOST=::
+Environment=UI_PORT=8787
+ExecStart=/usr/bin/python3 /opt/stella-vpngate/stella_vpngate.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
