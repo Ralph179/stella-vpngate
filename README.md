@@ -171,6 +171,7 @@ stella-vpn uninstall
 cd /opt/stella-vpngate
 git pull origin main
 python3 -m compileall stella_vpngate.py proxy_server.py vpn_utils.py cli.py
+chmod +x cli.py stella_vpngate.py proxy_server.py /usr/bin/stella-vpn
 systemctl restart stella-vpngate
 ```
 
