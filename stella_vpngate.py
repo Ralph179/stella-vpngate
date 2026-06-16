@@ -355,14 +355,33 @@ class Handler(BaseHTTPRequestHandler):
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{APP_NAME}</title><style>{CSS}</style></head><body class="login">
 <main class="login-box"><h1>{APP_NAME}</h1><p>{CN_NAME}</p>
+<form id="loginForm">
 <input id="u" autocomplete="username" placeholder="账号" value="admin">
 <input id="p" autocomplete="current-password" placeholder="密码" type="password">
-<button onclick="login()">登录</button><div id="err"></div></main>
+<button id="loginBtn" type="submit">登录</button><div id="err"></div>
+</form></main>
 <script>
-async function login(){{
- const r=await fetch(location.pathname.replace(/\\/$/,'')+'/api/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{username:u.value,password:p.value}})}})
- const j=await r.json(); if(j.ok) location=location.pathname.replace(/\\/$/,'')+'/'; else err.textContent=j.error||'登录失败'
-}}
+const form=document.getElementById('loginForm');
+const userInput=document.getElementById('u');
+const passInput=document.getElementById('p');
+const errBox=document.getElementById('err');
+const loginBtn=document.getElementById('loginBtn');
+form.addEventListener('submit', async (event)=>{{
+ event.preventDefault();
+ errBox.textContent='';
+ loginBtn.disabled=true;
+ try {{
+  const base=location.pathname.replace(/\\/$/,'');
+  const r=await fetch(base+'/api/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{username:userInput.value.trim(),password:passInput.value.trim()}})}});
+  const j=await r.json();
+  if(j.ok) location.href=base+'/';
+  else errBox.textContent=j.error||'登录失败，请检查账号、密码和安全路径';
+ }} catch(e) {{
+  errBox.textContent='登录请求失败，请检查服务是否正常运行';
+ }} finally {{
+  loginBtn.disabled=false;
+ }}
+}});
 </script></body></html>"""
 
     def render_app(self) -> str:
@@ -383,7 +402,7 @@ async function login(){{
 
 
 CSS = """
-:root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#18202a;background:#f6f7f9}body{margin:0}header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;background:#111827;color:white}header span{margin-left:12px;color:#b7c0ce;font-size:13px}button,select,input{border:1px solid #cfd5df;background:white;border-radius:6px;padding:8px 10px;font:inherit}button{cursor:pointer;background:#1f6feb;color:white;border-color:#1f6feb}button.secondary{background:white;color:#243043}.login{display:grid;place-items:center;min-height:100vh}.login-box{display:grid;gap:12px;width:min(360px,calc(100vw - 40px));padding:28px;background:white;border:1px solid #dbe1ea;border-radius:8px}main{padding:18px;max-width:1280px;margin:auto}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.metric,.panel{background:white;border:1px solid #dbe1ea;border-radius:8px;padding:14px}.metric b{display:block;font-size:22px;margin-top:8px}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.table{overflow:auto;background:white;border:1px solid #dbe1ea;border-radius:8px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:9px;border-bottom:1px solid #edf0f4;text-align:left;white-space:nowrap}.ok{color:#087f5b}.bad{color:#c92a2a}pre{white-space:pre-wrap;background:#111827;color:#dbeafe;padding:14px;border-radius:8px;min-height:420px}.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.form label{display:grid;gap:6px}.hint{color:#5b6573;font-size:13px}
+:root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#18202a;background:#f6f7f9}body{margin:0}header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;background:#111827;color:white}header span{margin-left:12px;color:#b7c0ce;font-size:13px}button,select,input{border:1px solid #cfd5df;background:white;border-radius:6px;padding:8px 10px;font:inherit}button{cursor:pointer;background:#1f6feb;color:white;border-color:#1f6feb}button.secondary{background:white;color:#243043}.login{display:grid;place-items:center;min-height:100vh}.login-box{display:grid;gap:12px;width:min(360px,calc(100vw - 40px));padding:28px;background:white;border:1px solid #dbe1ea;border-radius:8px}.login-box form{display:grid;gap:12px}.login-box #err{min-height:20px;color:#c92a2a;font-size:13px}main{padding:18px;max-width:1280px;margin:auto}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.metric,.panel{background:white;border:1px solid #dbe1ea;border-radius:8px;padding:14px}.metric b{display:block;font-size:22px;margin-top:8px}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.table{overflow:auto;background:white;border:1px solid #dbe1ea;border-radius:8px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:9px;border-bottom:1px solid #edf0f4;text-align:left;white-space:nowrap}.ok{color:#087f5b}.bad{color:#c92a2a}pre{white-space:pre-wrap;background:#111827;color:#dbeafe;padding:14px;border-radius:8px;min-height:420px}.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.form label{display:grid;gap:6px}.hint{color:#5b6573;font-size:13px}
 """
 
 SETTINGS_HTML = """
