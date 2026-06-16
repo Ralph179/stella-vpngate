@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import string
 import ipaddress
 import json
 import os
@@ -231,6 +232,11 @@ def ensure_vpngate_auth_file(data_dir: Path = DATA_DIR) -> Path:
     return path
 
 
+def generate_ui_password(length: int = 14) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
 def ensure_ui_auth(data_dir: Path = DATA_DIR) -> dict[str, str]:
     import hashlib
 
@@ -238,7 +244,7 @@ def ensure_ui_auth(data_dir: Path = DATA_DIR) -> dict[str, str]:
     current = load_json(auth_path(data_dir), {})
     if current.get("username") and current.get("password_hash") and current.get("secret_path"):
         return current
-    password = secrets.token_urlsafe(12)
+    password = generate_ui_password()
     salt = secrets.token_hex(16)
     record = {
         "username": "admin",
@@ -256,6 +262,8 @@ def verify_ui_password(username: str, password: str, data_dir: Path = DATA_DIR) 
     import hashlib
 
     record = ensure_ui_auth(data_dir)
+    username = username.strip()
+    password = password.strip()
     if username != record.get("username"):
         return False
     return hashlib.sha256((record.get("salt", "") + password).encode()).hexdigest() == record.get("password_hash")
@@ -265,7 +273,7 @@ def reset_ui_password(data_dir: Path = DATA_DIR) -> str:
     import hashlib
 
     record = ensure_ui_auth(data_dir)
-    password = secrets.token_urlsafe(12)
+    password = generate_ui_password()
     salt = secrets.token_hex(16)
     record.update({
         "password_hash": hashlib.sha256((salt + password).encode()).hexdigest(),
