@@ -1,0 +1,54 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/stella_vps_key
+          chmod 600 ~/.ssh/stella_vps_key
+
+      - name: Deploy on VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          DEPLOY_PATH="${DEPLOY_PATH:-/opt/stella-vpngate}"
+          VPS_PORT="${VPS_PORT:-22}"
+          ssh -i ~/.ssh/stella_vps_key -p "$VPS_PORT" -o StrictHostKeyChecking=accept-new "$VPS_USER@$VPS_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          git pull origin main
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y openvpn curl git ca-certificates iptables iproute2 psmisc python3
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y openvpn curl git ca-certificates iptables iproute psmisc python3
+          elif command -v yum >/dev/null 2>&1; then
+            yum install -y openvpn curl git ca-certificates iptables iproute psmisc python3
+          elif command -v apk >/dev/null 2>&1; then
+            apk add --no-cache openvpn curl git ca-certificates iptables iproute2 psmisc python3
+          fi
+          python3 -m compileall stella_vpngate.py proxy_server.py vpn_utils.py cli.py
+          install -m 644 systemd/stella-vpngate.service /etc/systemd/system/stella-vpngate.service
+          ln -sf "$DEPLOY_PATH/cli.py" /usr/bin/stella-vpn
+          chmod +x "$DEPLOY_PATH/cli.py" "$DEPLOY_PATH/stella_vpngate.py" /usr/bin/stella-vpn
+          systemctl daemon-reload
+          systemctl restart stella-vpngate
+          systemctl status stella-vpngate --no-pager
+          REMOTE
