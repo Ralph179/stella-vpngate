@@ -230,6 +230,19 @@ journalctl -u stella-vpngate -f
 
 ## 常见问题
 
+后台密码无法登录：
+
+```bash
+sudo env VPNGATE_DATA_DIR=/opt/stella-vpngate/data stella-vpn reset-password
+sudo systemctl restart stella-vpngate
+```
+
+然后重新打开：
+
+```bash
+stella-vpn url
+```
+
 检查 TUN/TAP：
 
 ```bash
