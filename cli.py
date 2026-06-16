@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+if "VPNGATE_DATA_DIR" not in os.environ and Path("/opt/stella-vpngate/data").exists():
+    os.environ["VPNGATE_DATA_DIR"] = "/opt/stella-vpngate/data"
 
 from vpn_utils import DATA_DIR, ensure_ui_auth, load_nodes, load_state, logger, public_server_ip, reset_secret_path, reset_ui_password, save_settings
 
