@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_NAME="stella-vpngate"
 INSTALL_DIR="${INSTALL_DIR:-/opt/stella-vpngate}"
+REPO_URL="${REPO_URL:-https://github.com/Ralph179/stella-vpngate.git}"
 SERVICE_FILE="/etc/systemd/system/stella-vpngate.service"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -36,9 +37,30 @@ install_deps() {
 install_deps
 mkdir -p "$INSTALL_DIR"
 
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+resolve_source_dir() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  if [ -n "$script_dir" ] && [ -f "$script_dir/stella_vpngate.py" ]; then
+    echo "$script_dir"
+    return
+  fi
+  if [ -f "./stella_vpngate.py" ]; then
+    pwd
+    return
+  fi
+  local tmp_dir
+  tmp_dir="$(mktemp -d /tmp/stella-vpngate-src.XXXXXX)"
+  git clone --depth 1 "$REPO_URL" "$tmp_dir"
+  echo "$tmp_dir"
+}
+
+SRC_DIR="$(resolve_source_dir)"
 if [ "$SRC_DIR" != "$INSTALL_DIR" ]; then
-  rsync -a --exclude .git "$SRC_DIR"/ "$INSTALL_DIR"/ 2>/dev/null || cp -a "$SRC_DIR"/. "$INSTALL_DIR"/
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --exclude data/ "$SRC_DIR"/ "$INSTALL_DIR"/
+  else
+    cp -a "$SRC_DIR"/. "$INSTALL_DIR"/
+  fi
 fi
 
 mkdir -p "$INSTALL_DIR/data/logs" "$INSTALL_DIR/data/configs"
