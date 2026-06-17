@@ -149,7 +149,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.is_secret_root():
-            self.send_html(self.render_login())
+            if valid_session(self.session_token(), DATA_DIR):
+                self.send_html(self.render_app())
+            else:
+                self.send_html(self.render_login())
             return
         if not self.require_auth():
             return
@@ -179,7 +182,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(Path(node["config_file"]).read_bytes())
         else:
-            self.send_error(404)
+            if route.startswith("/api/"):
+                self.send_error(404)
+            else:
+                self.send_response(302)
+                self.send_header("Location", f"/{ensure_ui_auth(DATA_DIR)['secret_path']}")
+                self.end_headers()
 
     def do_POST(self) -> None:
         if not self.require_auth(allow_login=True):
