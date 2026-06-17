@@ -25,12 +25,14 @@ from vpn_utils import (
     UI_PORT,
     check_nodes,
     check_proxy_health,
+    blacklist_node,
     connect_node,
     disconnect_current,
     drop_session,
     ensure_dirs,
     ensure_ui_auth,
     fetch_vpngate_nodes,
+    load_blacklist,
     load_nodes,
     load_settings,
     load_state,
@@ -40,6 +42,7 @@ from vpn_utils import (
     public_server_ip,
     reset_secret_path,
     reset_ui_password,
+    remove_blacklist_ip,
     save_nodes,
     save_settings,
     save_state,
@@ -123,7 +126,8 @@ class StellaRuntime:
         nodes = load_nodes(self.data_dir)
         for node in nodes:
             if node.get("id") == active:
-                node.update({"probe_status": "unavailable", "probe_message": message, "active": False})
+                node.update({"probe_status": "blacklisted", "probe_message": f"代理出口异常，已自动屏蔽：{message}", "active": False})
+                blacklist_node(node, message, self.data_dir)
         save_nodes(nodes, self.data_dir)
 
 
@@ -202,7 +206,7 @@ class Handler(BaseHTTPRequestHandler):
                     token = make_session(DATA_DIR)
                     self.send_json({"ok": True}, headers={"Set-Cookie": f"stella_session={token}; HttpOnly; SameSite=Lax; Path=/"})
                 else:
-                    self.send_json({"ok": False, "error": "invalid credentials"}, status=403)
+                    self.send_json({"ok": False, "error": "账号或密码错误"}, status=403)
             elif route == "/api/logout":
                 drop_session(self.session_token(), DATA_DIR)
                 self.send_json({"ok": True}, headers={"Set-Cookie": "stella_session=; Max-Age=0; Path=/"})
@@ -221,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/auto-connect":
                 node = select_best_node(DATA_DIR)
                 if not node:
-                    self.send_json({"ok": False, "error": "no available node"}, status=400)
+                    self.send_json({"ok": False, "error": "没有可用节点"}, status=400)
                 else:
                     ok, message = connect_node(node["id"], DATA_DIR)
                     self.send_json({"ok": ok, "node_id": node["id"], "message": message}, status=200 if ok else 400)
@@ -288,7 +292,7 @@ class Handler(BaseHTTPRequestHandler):
         if valid_session(self.session_token(), DATA_DIR):
             return True
         if route.startswith("/api/"):
-            self.send_json({"ok": False, "error": "unauthorized"}, status=401)
+            self.send_json({"ok": False, "error": "未登录或会话已过期"}, status=401)
         else:
             self.send_response(302)
             self.send_header("Location", f"/{ensure_ui_auth(DATA_DIR)['secret_path']}")
@@ -352,8 +356,14 @@ class Handler(BaseHTTPRequestHandler):
                         favs.discard(node_id)
                     state["favorite_node_ids"] = sorted(favs)
                 else:
-                    node["probe_status"] = "blacklisted"
-                    node["probe_message"] = "manual blacklist"
+                    if node.get("probe_status") == "blacklisted":
+                        remove_blacklist_ip(str(node.get("ip", "")), DATA_DIR)
+                        node["probe_status"] = "not_checked"
+                        node["probe_message"] = "已解除屏蔽，等待重新检测"
+                    else:
+                        node["probe_status"] = "blacklisted"
+                        node["probe_message"] = "手动屏蔽"
+                        blacklist_node(node, "手动屏蔽", DATA_DIR, source="manual")
         save_nodes(nodes, DATA_DIR)
         save_state(state, DATA_DIR)
         self.send_json({"ok": True})
@@ -398,13 +408,13 @@ form.addEventListener('submit', async (event)=>{{
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{APP_NAME}</title><style>{CSS}</style></head><body>
 <header><div><b>{APP_NAME}</b><span>{CN_NAME}</span></div><nav>
-<button onclick="tab('dash')">Dashboard</button><button onclick="tab('nodes')">节点</button><button onclick="tab('settings')">设置</button><button onclick="tab('logs')">日志</button><button onclick="api('/api/logout',{{}}).then(()=>location='/{secret}')">退出</button>
+<button onclick="tab('dash')">控制台</button><button onclick="tab('nodes')">节点</button><button onclick="tab('settings')">设置</button><button onclick="tab('logs')">日志</button><button onclick="api('/api/logout',{{}}).then(()=>location='/{secret}')">退出</button>
 </nav></header>
 <main>
 <section id="dash"></section>
-<section id="nodes" hidden><div class="toolbar"><select id="countryFilter" onchange="renderNodes()"></select><select id="statusFilter" onchange="renderNodes()"><option value="">全部状态</option><option>available</option><option>unavailable</option><option>not_checked</option><option>blacklisted</option></select><select id="sortBy" onchange="renderNodes()"><option value="latency_ms">延迟</option><option value="score">Score</option><option value="speed">Speed</option><option value="sessions">Sessions</option></select></div><div id="nodeTable"></div></section>
+<section id="nodes" hidden><div class="toolbar"><select id="countryFilter" onchange="renderNodes()"></select><select id="statusFilter" onchange="renderNodes()"><option value="">全部状态</option><option value="available">可用</option><option value="unavailable">不可用</option><option value="not_checked">未检测</option><option value="blacklisted">已屏蔽</option></select><select id="sortBy" onchange="renderNodes()"><option value="latency_ms">延迟</option><option value="score">评分</option><option value="speed">速度</option><option value="sessions">会话数</option></select></div><div id="nodeTable"></div></section>
 <section id="settings" hidden>{SETTINGS_HTML}</section>
-<section id="logs" hidden><div class="toolbar"><select id="logLevel" onchange="loadLogs()"><option value="">全部</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select><button onclick="copyLogs()">复制日志</button><button onclick="api('/api/clear-logs',{{}}).then(loadLogs)">清空日志</button></div><pre id="logBox"></pre></section>
+<section id="logs" hidden><div class="toolbar"><select id="logLevel" onchange="loadLogs()"><option value="">全部级别</option><option value="INFO">信息</option><option value="WARNING">警告</option><option value="ERROR">错误</option></select><button onclick="copyLogs()">复制日志</button><button onclick="api('/api/clear-logs',{{}}).then(loadLogs)">清空日志</button></div><pre id="logBox"></pre></section>
 </main>
 <script>{JS}</script></body></html>"""
 
@@ -415,7 +425,7 @@ CSS = """
 
 SETTINGS_HTML = """
 <div class="panel"><div class="form">
-<label>路由模式<select id="routing_mode"><option>auto</option><option>fixed_region</option><option>fixed_ip</option><option>favorites</option></select></label>
+<label>路由模式<select id="routing_mode"><option value="auto">自动选择</option><option value="fixed_region">固定国家/地区</option><option value="fixed_ip">固定节点</option><option value="favorites">优先收藏</option></select></label>
 <label>固定国家/地区<input id="force_country" placeholder="JP / KR / US"></label>
 <label>固定节点 ID<input id="fixed_node_id"></label>
 <label>代理监听地址<input id="local_proxy_host" placeholder="127.0.0.1"></label>
@@ -434,10 +444,14 @@ let state={}, nodes=[], logs=[];
 const base=location.pathname.replace(/\/$/,'');
 async function api(path, body){const r=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}); const j=await r.json(); if(!r.ok) alert(j.error||j.message||'操作失败'); return j}
 async function get(path){const r=await fetch(base+path); return await r.json()}
+function statusText(v){return {available:'可用',unavailable:'不可用',not_checked:'未检测',blacklisted:'已屏蔽',testing:'检测中'}[v]||'未知'}
+function modeText(v){return {auto:'自动选择',fixed_region:'固定国家/地区',fixed_ip:'固定节点',favorites:'优先收藏'}[v]||'自动选择'}
+function protoText(v){return String(v||'').toUpperCase()}
+function speedText(v){return v?Math.round(v/1024/1024)+' MB/s':'0'}
 function tab(id){for(const s of document.querySelectorAll('main section'))s.hidden=s.id!==id;if(id==='logs')loadLogs();if(id==='nodes')renderNodes()}
 async function refresh(){state=await get('/api/state');nodes=await get('/api/nodes');renderDash();renderNodes();fillSettings()}
-function renderDash(){const active=nodes.find(n=>n.id===state.active_openvpn_node_id)||{};dash.innerHTML=`<div class="toolbar"><button onclick="api('/api/fetch',{}).then(refresh)">更新节点</button><button onclick="api('/api/check',{}).then(refresh)">立即检测</button><button onclick="api('/api/auto-connect',{}).then(refresh)">自动连接最佳节点</button><button onclick="api('/api/disconnect',{}).then(refresh)">断开连接</button><button onclick="api('/api/check-proxy',{}).then(refresh)">检测代理出口</button></div><div class="grid"><div class="metric">当前节点<b>${active.id||'未连接'}</b></div><div class="metric">出口 IP<b>${state.proxy_ip||'-'}</b></div><div class="metric">代理状态<b class="${state.proxy_ok?'ok':'bad'}">${state.proxy_ok?'正常':'异常'}</b></div><div class="metric">代理延迟<b>${state.proxy_latency_ms||0} ms</b></div><div class="metric">节点总数<b>${nodes.length}</b></div><div class="metric">可用节点<b>${nodes.filter(n=>n.probe_status==='available').length}</b></div><div class="metric">不可用节点<b>${nodes.filter(n=>n.probe_status==='unavailable').length}</b></div><div class="metric">路由模式<b>${state.routing_mode||'auto'}</b></div></div><div class="panel"><b>本地代理</b><p>HTTP/SOCKS5: http://127.0.0.1:8888</p><p class="hint">${state.proxy_error||''}</p></div>`}
-function renderNodes(){let list=[...nodes];const c=countryFilter.value,s=statusFilter.value;if(c)list=list.filter(n=>n.country_short===c);if(s)list=list.filter(n=>n.probe_status===s);const sort=sortBy.value;list.sort((a,b)=>(a[sort]||999999)-(b[sort]||999999));countryFilter.innerHTML='<option value="">全部国家</option>'+[...new Set(nodes.map(n=>n.country_short).filter(Boolean))].sort().map(x=>`<option ${x===c?'selected':''}>${x}</option>`).join('');nodeTable.innerHTML=`<div class="table"><table><thead><tr><th>状态</th><th>国家</th><th>IP</th><th>HostName</th><th>协议</th><th>端口</th><th>延迟</th><th>Score</th><th>Speed</th><th>Sessions</th><th>ASN</th><th>IP 类型</th><th>活动</th><th>收藏</th><th>操作</th></tr></thead><tbody>${list.map(n=>`<tr><td>${n.probe_status}</td><td>${n.country_short}</td><td>${n.ip}</td><td>${n.host_name||''}</td><td>${n.proto}</td><td>${n.remote_port}</td><td>${n.latency_ms||n.ping||0}</td><td>${n.score||0}</td><td>${n.speed||0}</td><td>${n.sessions||0}</td><td>${n.asn||''}</td><td>${n.ip_type||''}</td><td>${n.active?'是':''}</td><td>${n.favorite?'是':''}</td><td><button onclick="api('/api/connect',{node_id:'${n.id}'}).then(refresh)">连接</button> <button class="secondary" onclick="api('/api/favorite',{node_id:'${n.id}'}).then(refresh)">收藏</button> <button class="secondary" onclick="api('/api/blacklist',{node_id:'${n.id}'}).then(refresh)">拉黑</button> <a href="${base}/api/download/${n.id}">下载</a></td></tr>`).join('')}</tbody></table></div>`}
+function renderDash(){const active=nodes.find(n=>n.id===state.active_openvpn_node_id)||{};dash.innerHTML=`<div class="toolbar"><button onclick="api('/api/fetch',{}).then(refresh)">更新节点</button><button onclick="api('/api/check',{}).then(refresh)">立即检测</button><button onclick="api('/api/auto-connect',{}).then(refresh)">自动连接最佳节点</button><button onclick="api('/api/disconnect',{}).then(refresh)">断开连接</button><button onclick="api('/api/check-proxy',{}).then(refresh)">检测代理出口</button></div><div class="grid"><div class="metric">当前节点<b>${active.id||'未连接'}</b></div><div class="metric">出口 IP<b>${state.proxy_ip||'-'}</b></div><div class="metric">代理状态<b class="${state.proxy_ok?'ok':'bad'}">${state.proxy_ok?'正常':'异常'}</b></div><div class="metric">代理延迟<b>${state.proxy_latency_ms||0} ms</b></div><div class="metric">节点总数<b>${nodes.length}</b></div><div class="metric">可用节点<b>${nodes.filter(n=>n.probe_status==='available').length}</b></div><div class="metric">不可用节点<b>${nodes.filter(n=>n.probe_status==='unavailable').length}</b></div><div class="metric">已屏蔽节点<b>${nodes.filter(n=>n.probe_status==='blacklisted').length}</b></div><div class="metric">路由模式<b>${modeText(state.routing_mode)}</b></div></div><div class="panel"><b>本地代理</b><p>HTTP/SOCKS5：127.0.0.1:8888</p><p class="hint">${state.proxy_error||''}</p><p class="hint">${state.last_check_message||''}</p></div>`}
+function renderNodes(){let list=[...nodes];const c=countryFilter.value,s=statusFilter.value;if(c)list=list.filter(n=>n.country_short===c);if(s)list=list.filter(n=>n.probe_status===s);const sort=sortBy.value;list.sort((a,b)=>(a[sort]||999999)-(b[sort]||999999));countryFilter.innerHTML='<option value="">全部国家/地区</option>'+[...new Set(nodes.map(n=>n.country_short).filter(Boolean))].sort().map(x=>`<option ${x===c?'selected':''}>${x}</option>`).join('');nodeTable.innerHTML=`<div class="table"><table><thead><tr><th>状态</th><th>国家/地区</th><th>IP</th><th>主机名</th><th>协议</th><th>端口</th><th>延迟</th><th>评分</th><th>速度</th><th>会话数</th><th>自治系统</th><th>IP 类型</th><th>当前</th><th>收藏</th><th>操作</th></tr></thead><tbody>${list.map(n=>{const blocked=n.probe_status==='blacklisted';return `<tr><td>${statusText(n.probe_status)}</td><td>${n.country_short}</td><td>${n.ip}</td><td>${n.host_name||''}</td><td>${protoText(n.proto)}</td><td>${n.remote_port}</td><td>${n.latency_ms||n.ping||0} ms</td><td>${n.score||0}</td><td>${speedText(n.speed)}</td><td>${n.sessions||0}</td><td>${n.asn||''}</td><td>${n.ip_type||''}</td><td>${n.active?'是':''}</td><td>${n.favorite?'是':''}</td><td>${blocked?'':`<button onclick="api('/api/connect',{node_id:'${n.id}'}).then(refresh)">连接</button>`} <button class="secondary" onclick="api('/api/favorite',{node_id:'${n.id}'}).then(refresh)">收藏</button> <button class="secondary" onclick="api('/api/blacklist',{node_id:'${n.id}'}).then(refresh)">${blocked?'解除屏蔽':'屏蔽'}</button> <a href="${base}/api/download/${n.id}">下载配置</a></td></tr>`}).join('')}</tbody></table></div>`}
 function fillSettings(){for(const k of ['routing_mode','force_country','fixed_node_id'])if(document.getElementById(k))document.getElementById(k).value=state[k]||'';local_proxy_host.value='127.0.0.1';local_proxy_port.value='8888'}
 async function saveSettings(){const ids=['routing_mode','force_country','fixed_node_id','local_proxy_host','local_proxy_port','local_proxy_user','local_proxy_password','max_scan_rows','target_valid_nodes','fetch_interval_seconds','check_interval_seconds'];const body={};for(const id of ids){const el=document.getElementById(id);if(el&&el.value)body[id]=el.type==='number'?Number(el.value):el.value}await api('/api/settings',body);refresh()}
 async function loadLogs(){logs=await get('/api/logs?level='+(logLevel.value||''));logBox.textContent=logs.map(x=>`${x.timestamp} ${x.level} ${x.module} ${x.message}`).join('\n')}
