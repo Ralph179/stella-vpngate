@@ -73,7 +73,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "fixed_node_id": "",
     "favorite_node_ids": [],
     "favorites_fallback": True,
-    "connection_enabled": True,
+    "connection_enabled": False,
     "local_proxy": "http://127.0.0.1:8888",
 }
 
@@ -644,9 +644,8 @@ def test_node(node: dict[str, Any], data_dir: Path = DATA_DIR, dev: str = "tun10
     return node
 
 
-def check_nodes(data_dir: Path = DATA_DIR, limit: int | None = None, openvpn: bool = False) -> list[dict[str, Any]]:
+def check_nodes(data_dir: Path = DATA_DIR, limit: int | None = None, openvpn: bool = False, full: bool = False) -> list[dict[str, Any]]:
     nodes = load_nodes(data_dir)
-    limit = limit or int(os.getenv("TARGET_VALID_NODES", str(TARGET_VALID_NODES)))
     blacklist = load_blacklist(data_dir)
     for node in nodes:
         blocked = blacklist.get(str(node.get("ip", "")))
@@ -654,8 +653,9 @@ def check_nodes(data_dir: Path = DATA_DIR, limit: int | None = None, openvpn: bo
             node["probe_status"] = "blacklisted"
             node["probe_message"] = f"已自动屏蔽：{blocked.get('reason', '检测不可用')}"
     candidates = [n for n in nodes if n.get("probe_status") != "blacklisted"][: int(os.getenv("MAX_SCAN_ROWS", str(MAX_SCAN_ROWS)))]
+    target_valid = len(candidates) if full else (limit or int(os.getenv("TARGET_VALID_NODES", str(TARGET_VALID_NODES))))
     checked: dict[str, dict[str, Any]] = {}
-    max_workers = min(8, max(1, limit * 2))
+    max_workers = min(8, max(1, len(candidates), target_valid * 2))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(test_node, node, data_dir, f"tun{10 + i}", openvpn): node for i, node in enumerate(candidates)}
         available = 0
@@ -664,14 +664,15 @@ def check_nodes(data_dir: Path = DATA_DIR, limit: int | None = None, openvpn: bo
             checked[result["id"]] = result
             if result.get("probe_status") == "available":
                 available += 1
-            if available >= limit:
+            if not full and available >= target_valid:
                 break
     merged = [checked.get(n["id"], n) for n in nodes]
     save_nodes(merged, data_dir)
     state = load_state(data_dir)
-    state["last_check_message"] = f"已检测 {len(checked)} 个节点，可用 {sum(1 for n in merged if n.get('probe_status') == 'available')} 个，已屏蔽 {sum(1 for n in merged if n.get('probe_status') == 'blacklisted')} 个"
+    mode = "全量检测" if full else "快速检测"
+    state["last_check_message"] = f"{mode}完成：已检测 {len(checked)} 个节点，可用 {sum(1 for n in merged if n.get('probe_status') == 'available')} 个，已屏蔽 {sum(1 for n in merged if n.get('probe_status') == 'blacklisted')} 个"
     save_state(state, data_dir)
-    logger.write("INFO", "节点", "节点检测完成", checked=len(checked))
+    logger.write("INFO", "节点", "节点检测完成", checked=len(checked), full=full)
     return merged
 
 
