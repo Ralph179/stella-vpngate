@@ -12,7 +12,7 @@ from pathlib import Path
 if "VPNGATE_DATA_DIR" not in os.environ and Path("/opt/stella-vpngate/data").exists():
     os.environ["VPNGATE_DATA_DIR"] = "/opt/stella-vpngate/data"
 
-from vpn_utils import DATA_DIR, ensure_ui_auth, load_nodes, load_state, logger, public_server_ip, reset_secret_path, reset_ui_password, save_settings
+from vpn_utils import DATA_DIR, enrich_node_ip_types, ensure_ui_auth, load_nodes, load_state, logger, public_server_ip, reset_secret_path, reset_ui_password, save_settings
 
 
 SERVICE = "stella-vpngate"
@@ -57,6 +57,18 @@ def logs() -> None:
     subprocess.run(["tail", "-n", "120", str(today[-1])])
 
 
+def check_ip_types() -> None:
+    nodes = enrich_node_ip_types(DATA_DIR)
+    total = sum(1 for n in nodes if n.get("ip_type"))
+    residential = sum(1 for n in nodes if n.get("ip_type") == "residential")
+    hosting = sum(1 for n in nodes if n.get("ip_type") == "hosting")
+    mobile = sum(1 for n in nodes if n.get("ip_type") == "mobile")
+    print(f"已检测 IP 类型节点: {total}")
+    print(f"住宅: {residential}")
+    print(f"机房: {hosting}")
+    print(f"移动网络: {mobile}")
+
+
 def public_proxy(enable: bool) -> None:
     settings = {"local_proxy_host": "0.0.0.0" if enable else "127.0.0.1"}
     save_settings(settings, DATA_DIR)
@@ -85,6 +97,7 @@ def menu() -> None:
         ("重启服务", lambda: run_cmd(["systemctl", "restart", SERVICE])),
         ("停止服务", lambda: run_cmd(["systemctl", "stop", SERVICE])),
         ("查看日志", logs),
+        ("检测节点 IP 类型", check_ip_types),
         ("开启公网代理监听", lambda: public_proxy(True)),
         ("关闭公网代理监听", lambda: public_proxy(False)),
         ("设置代理认证", set_proxy_auth),
@@ -101,7 +114,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="stella-vpn")
     parser.add_argument("command", nargs="?", choices=[
         "status", "url", "account", "reset-password", "reset-path", "restart", "stop", "logs",
-        "public-proxy-on", "public-proxy-off", "set-proxy-auth", "uninstall",
+        "check-ip-types", "public-proxy-on", "public-proxy-off", "set-proxy-auth", "uninstall",
     ])
     args = parser.parse_args()
     if not args.command:
@@ -122,6 +135,8 @@ def main() -> None:
         sys.exit(run_cmd(["systemctl", "stop", SERVICE]))
     elif args.command == "logs":
         logs()
+    elif args.command == "check-ip-types":
+        check_ip_types()
     elif args.command == "public-proxy-on":
         public_proxy(True)
     elif args.command == "public-proxy-off":
