@@ -50,7 +50,7 @@ StellaVPN Gate 不是免费住宅 IP 抓取器，也不是公网扫描器。
 - 连接指定节点、断开节点、自动选择最佳节点
 - 路由模式：自动、固定地区、固定节点、收藏节点
 - 代理出口 IP 检测
-- IP 类型识别提示，结果仅供参考
+- IP 类型识别提示：住宅、机房、移动网络或未知，结果仅供参考
 - JSON 文件保存状态和配置
 - JSONL 本地日志
 - systemd 自启动
@@ -158,6 +158,7 @@ stella-vpn reset-password
 stella-vpn reset-path
 stella-vpn restart
 stella-vpn logs
+stella-vpn check-ip-types
 stella-vpn public-proxy-on
 stella-vpn set-proxy-auth
 stella-vpn uninstall
