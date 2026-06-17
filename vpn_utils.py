@@ -38,6 +38,7 @@ FETCH_INTERVAL_SECONDS = int(os.getenv("FETCH_INTERVAL_SECONDS", "1260"))
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "1260"))
 TARGET_VALID_NODES = int(os.getenv("TARGET_VALID_NODES", "3"))
 MAX_SCAN_ROWS = int(os.getenv("MAX_SCAN_ROWS", "300"))
+IP_TYPE_CHECK_LIMIT = int(os.getenv("IP_TYPE_CHECK_LIMIT", "40"))
 OPENVPN_TEST_TIMEOUT_SECONDS = int(os.getenv("OPENVPN_TEST_TIMEOUT_SECONDS", "35"))
 OPENVPN_CMD = os.getenv("OPENVPN_CMD", "openvpn")
 OPENVPN_AUTH_USER = os.getenv("OPENVPN_AUTH_USER", "vpn")
@@ -61,6 +62,10 @@ DEFAULT_STATE: dict[str, Any] = {
     "last_check_message": "",
     "proxy_ok": False,
     "proxy_ip": "",
+    "proxy_ip_type": "",
+    "proxy_ip_type_name": "",
+    "proxy_location": "",
+    "proxy_isp": "",
     "proxy_latency_ms": 0,
     "proxy_error": "",
     "routing_mode": "auto",
@@ -862,15 +867,15 @@ def lookup_ip_info(ip: str, timeout: int = 8) -> dict[str, Any]:
     try:
         ipaddress.ip_address(ip)
     except ValueError:
-        return {"ip_type": "unknown"}
+        return {"ip_type": "unknown", "ip_type_name": "未知"}
     url = f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp,org,as,asname,proxy,hosting,mobile,message"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
     except Exception as exc:
-        return {"ip_type": "unknown", "error": str(exc)}
+        return {"ip_type": "unknown", "ip_type_name": "未知", "error": str(exc)}
     if data.get("status") != "success":
-        return {"ip_type": "unknown", "error": data.get("message", "")}
+        return {"ip_type": "unknown", "ip_type_name": "未知", "error": data.get("message", "")}
     if data.get("mobile"):
         ip_type = "mobile"
     elif data.get("hosting") or data.get("proxy"):
@@ -878,7 +883,55 @@ def lookup_ip_info(ip: str, timeout: int = 8) -> dict[str, Any]:
     else:
         ip_type = "residential"
     data["ip_type"] = ip_type
+    data["ip_type_name"] = ip_type_label(ip_type)
     return data
+
+
+def ip_type_label(ip_type: str) -> str:
+    return {
+        "residential": "住宅",
+        "hosting": "机房",
+        "mobile": "移动网络",
+        "unknown": "未知",
+    }.get(ip_type or "unknown", "未知")
+
+
+def enrich_node_ip_types(data_dir: Path = DATA_DIR, limit: int | None = None, force: bool = False) -> list[dict[str, Any]]:
+    nodes = load_nodes(data_dir)
+    if not nodes:
+        return nodes
+    check_limit = limit or int(os.getenv("IP_TYPE_CHECK_LIMIT", str(IP_TYPE_CHECK_LIMIT)))
+    checked = 0
+    for node in nodes:
+        if checked >= check_limit:
+            break
+        if node.get("probe_status") == "blacklisted":
+            continue
+        if node.get("ip_type") and not force:
+            continue
+        ip = str(node.get("ip") or "").strip()
+        if not ip:
+            continue
+        info = lookup_ip_info(ip)
+        node.update({
+            "ip_type": info.get("ip_type", "unknown"),
+            "ip_type_name": info.get("ip_type_name", ip_type_label(info.get("ip_type", "unknown"))),
+            "location": " / ".join(x for x in [info.get("country", ""), info.get("regionName", ""), info.get("city", "")] if x),
+            "asn": info.get("as", ""),
+            "as_name": info.get("asname", ""),
+            "isp": info.get("isp", ""),
+            "org": info.get("org", ""),
+            "ip_checked_at": now_ts(),
+            "ip_check_error": info.get("error", ""),
+        })
+        checked += 1
+        time.sleep(0.2)
+    save_nodes(nodes, data_dir)
+    state = load_state(data_dir)
+    state["last_ip_type_check_message"] = f"已检测 {checked} 个节点 IP 类型"
+    save_state(state, data_dir)
+    logger.write("INFO", "IP类型", "节点 IP 类型检测完成", checked=checked)
+    return nodes
 
 
 def public_server_ip() -> str:
