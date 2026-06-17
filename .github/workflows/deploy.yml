@@ -46,6 +46,7 @@ jobs:
           fi
           python3 -m compileall stella_vpngate.py proxy_server.py vpn_utils.py cli.py
           install -m 644 systemd/stella-vpngate.service /etc/systemd/system/stella-vpngate.service
+          rm -f /usr/bin/stella-vpn
           cat > /usr/bin/stella-vpn <<EOF
           #!/usr/bin/env sh
           exec python3 "$DEPLOY_PATH/cli.py" "\$@"
