@@ -140,8 +140,8 @@ http://your_server_ip:8787/randomSecretPath
 
 后台页面包含：
 
-- Dashboard：当前连接节点、出口 IP、代理状态、节点统计和快捷操作。
-- 节点列表：国家、IP、协议、端口、延迟、Score、Speed、Sessions、IP 类型、收藏和操作按钮。
+- 控制台：当前连接节点、出口 IP、代理状态、节点统计和快捷操作。
+- 节点列表：国家/地区、IP、协议、端口、延迟、评分、速度、会话数、IP 类型、收藏、屏蔽和操作按钮。
 - 设置：路由模式、固定国家、固定节点、代理监听地址、代理认证和检测间隔。
 - 日志：查看、过滤、复制和清空本地运行日志。
 
@@ -171,7 +171,6 @@ stella-vpn uninstall
 cd /opt/stella-vpngate
 git pull origin main
 python3 -m compileall stella_vpngate.py proxy_server.py vpn_utils.py cli.py
-chmod +x cli.py stella_vpngate.py proxy_server.py /usr/bin/stella-vpn
 systemctl restart stella-vpngate
 ```
 
