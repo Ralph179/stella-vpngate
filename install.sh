@@ -57,9 +57,9 @@ resolve_source_dir() {
 SRC_DIR="$(resolve_source_dir)"
 if [ "$SRC_DIR" != "$INSTALL_DIR" ]; then
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --exclude data/ "$SRC_DIR"/ "$INSTALL_DIR"/
+    rsync -a --exclude data/ --exclude .git/ "$SRC_DIR"/ "$INSTALL_DIR"/
   else
-    cp -a "$SRC_DIR"/. "$INSTALL_DIR"/
+    (cd "$SRC_DIR" && tar --exclude="./data" --exclude="./.git" -cf - .) | (cd "$INSTALL_DIR" && tar -xf -)
   fi
 fi
 
