@@ -556,7 +556,6 @@ def classify_openvpn_log(text: str) -> tuple[bool, str]:
         "cannot open TUN/TAP dev",
         "permission denied",
         "fatal",
-        "route",
     ]
     lowered = text.lower()
     for needle in checks:
