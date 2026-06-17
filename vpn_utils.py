@@ -225,6 +225,40 @@ def save_nodes(nodes: list[dict[str, Any]], data_dir: Path = DATA_DIR) -> None:
     save_json(nodes_path(data_dir), nodes)
 
 
+def load_blacklist(data_dir: Path = DATA_DIR) -> dict[str, dict[str, Any]]:
+    raw = load_json(blacklist_path(data_dir), {})
+    if not isinstance(raw, dict):
+        return {}
+    if isinstance(raw.get("ips"), dict):
+        raw = raw["ips"]
+    return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+
+
+def save_blacklist(entries: dict[str, dict[str, Any]], data_dir: Path = DATA_DIR) -> None:
+    save_json(blacklist_path(data_dir), entries, 0o600)
+
+
+def blacklist_node(node: dict[str, Any], message: str, data_dir: Path = DATA_DIR, source: str = "auto") -> None:
+    ip = str(node.get("ip") or node.get("remote_host") or "").strip()
+    if not ip:
+        return
+    entries = load_blacklist(data_dir)
+    entries[ip] = {
+        "ip": ip,
+        "node_id": node.get("id", ""),
+        "reason": message or "检测不可用",
+        "source": source,
+        "blocked_at": now_ts(),
+    }
+    save_blacklist(entries, data_dir)
+
+
+def remove_blacklist_ip(ip: str, data_dir: Path = DATA_DIR) -> None:
+    entries = load_blacklist(data_dir)
+    entries.pop(ip, None)
+    save_blacklist(entries, data_dir)
+
+
 def ensure_vpngate_auth_file(data_dir: Path = DATA_DIR) -> Path:
     path = vpn_auth_path(data_dir)
     text = f"{os.getenv('OPENVPN_AUTH_USER', OPENVPN_AUTH_USER)}\n{os.getenv('OPENVPN_AUTH_PASS', OPENVPN_AUTH_PASS)}\n"
@@ -439,7 +473,7 @@ def normalize_openvpn_config(config_text: str) -> str:
 
 
 def fetch_vpngate_nodes(data_dir: Path = DATA_DIR, api_url: str = API_URL) -> list[dict[str, Any]]:
-    logger.write("INFO", "API", "Fetching VPNGate official node list", url=api_url)
+    logger.write("INFO", "节点", "正在拉取 VPNGate 官方节点列表", url=api_url)
     req = urllib.request.Request(api_url, headers={"User-Agent": "StellaVPNGate/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=25) as resp:
@@ -449,11 +483,19 @@ def fetch_vpngate_nodes(data_dir: Path = DATA_DIR, api_url: str = API_URL) -> li
     nodes = parse_vpngate_csv(body, data_dir=data_dir, max_rows=int(os.getenv("MAX_SCAN_ROWS", str(MAX_SCAN_ROWS))))
     existing = {n["id"]: n for n in load_nodes(data_dir)}
     favorites = {n["id"] for n in existing.values() if n.get("favorite")}
+    blacklist = load_blacklist(data_dir)
     active_id = load_state(data_dir).get("active_openvpn_node_id", "")
     for node in nodes:
         old = existing.get(node["id"], {})
         node["favorite"] = node["id"] in favorites
-        if old.get("probe_status") in ("available", "blacklisted"):
+        blocked = blacklist.get(node["ip"])
+        if blocked:
+            node.update({
+                "probe_status": "blacklisted",
+                "probe_message": f"已自动屏蔽：{blocked.get('reason', '检测不可用')}",
+                "blocked_at": blocked.get("blocked_at", 0),
+            })
+        elif old.get("probe_status") in ("available", "blacklisted"):
             node.update({
                 "probe_status": old.get("probe_status", "not_checked"),
                 "probe_message": old.get("probe_message", ""),
@@ -466,9 +508,9 @@ def fetch_vpngate_nodes(data_dir: Path = DATA_DIR, api_url: str = API_URL) -> li
         node["active"] = node["id"] == active_id
     save_nodes(nodes, data_dir)
     state = load_state(data_dir)
-    state.update({"last_fetch_at": now_ts(), "last_fetch_status": "ok", "last_fetch_message": f"Fetched {len(nodes)} nodes"})
+    state.update({"last_fetch_at": now_ts(), "last_fetch_status": "ok", "last_fetch_message": f"已拉取 {len(nodes)} 个节点"})
     save_state(state, data_dir)
-    logger.write("INFO", "API", "Fetched VPNGate nodes", count=len(nodes))
+    logger.write("INFO", "节点", "节点拉取完成", count=len(nodes))
     return nodes
 
 
@@ -477,11 +519,11 @@ def diagnose_fetch_error(exc: Exception) -> str:
     if isinstance(exc, urllib.error.URLError):
         reason = getattr(exc, "reason", "")
         if isinstance(reason, ssl.SSLError):
-            return f"SSL verification failed or TLS blocked: {reason}"
+            return f"SSL 校验失败或 TLS 被阻断：{reason}"
         if isinstance(reason, socket.gaierror):
-            return f"DNS resolution failed for VPNGate API: {reason}"
-        return f"VPNGate API connection failed: {reason or text}"
-    return f"VPNGate API returned unexpected data: {text}"
+            return f"VPNGate API 域名解析失败：{reason}"
+        return f"VPNGate API 连接失败：{reason or text}"
+    return f"VPNGate API 返回异常数据：{text}"
 
 
 def tcp_probe(host: str, port: int, timeout: float = 5.0) -> tuple[bool, int, str]:
@@ -489,7 +531,7 @@ def tcp_probe(host: str, port: int, timeout: float = 5.0) -> tuple[bool, int, st
     try:
         with socket.create_connection((host, port), timeout=timeout):
             latency_ms = int((time.monotonic() - start) * 1000)
-            return True, latency_ms, "tcp ok"
+            return True, latency_ms, "TCP 端口可连接"
     except OSError as exc:
         return False, 0, str(exc)
 
@@ -506,7 +548,7 @@ def ping_probe(host: str, timeout: int = 3) -> int:
 
 def classify_openvpn_log(text: str) -> tuple[bool, str]:
     if "Initialization Sequence Completed" in text:
-        return True, "Initialization Sequence Completed"
+        return True, "OpenVPN 初始化完成"
     checks = [
         "AUTH_FAILED",
         "TLS Error",
@@ -520,12 +562,12 @@ def classify_openvpn_log(text: str) -> tuple[bool, str]:
     for needle in checks:
         if needle.lower() in lowered:
             return False, needle
-    return False, "OpenVPN initialization timed out"
+    return False, "OpenVPN 初始化超时"
 
 
 def run_openvpn_probe(node: dict[str, Any], dev: str, data_dir: Path = DATA_DIR) -> tuple[bool, str]:
     if shutil.which(os.getenv("OPENVPN_CMD", OPENVPN_CMD)) is None:
-        return False, "openvpn is not installed"
+        return False, "未安装 openvpn"
     ensure_vpngate_auth_file(data_dir)
     cmd = [
         os.getenv("OPENVPN_CMD", OPENVPN_CMD),
@@ -545,7 +587,7 @@ def run_openvpn_probe(node: dict[str, Any], dev: str, data_dir: Path = DATA_DIR)
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     except PermissionError:
-        return False, "permission denied starting openvpn"
+        return False, "启动 openvpn 权限不足"
     except OSError as exc:
         return False, str(exc)
     deadline = time.time() + int(os.getenv("OPENVPN_TEST_TIMEOUT_SECONDS", str(OPENVPN_TEST_TIMEOUT_SECONDS)))
@@ -557,7 +599,7 @@ def run_openvpn_probe(node: dict[str, Any], dev: str, data_dir: Path = DATA_DIR)
                 if line:
                     output.append(line)
                     ok, msg = classify_openvpn_log("".join(output))
-                    if ok or msg != "OpenVPN initialization timed out":
+                    if ok or msg != "OpenVPN 初始化超时":
                         return ok, msg
             if proc.poll() is not None:
                 break
@@ -569,6 +611,8 @@ def run_openvpn_probe(node: dict[str, Any], dev: str, data_dir: Path = DATA_DIR)
 
 def test_node(node: dict[str, Any], data_dir: Path = DATA_DIR, dev: str = "tun10", openvpn: bool = False) -> dict[str, Any]:
     node = node.copy()
+    if node.get("probe_status") == "blacklisted":
+        return node
     node["probe_status"] = "testing"
     host = node.get("remote_host") or node.get("ip")
     port = int(node.get("remote_port") or 1194)
@@ -578,24 +622,33 @@ def test_node(node: dict[str, Any], data_dir: Path = DATA_DIR, dev: str = "tun10
         ok, tcp_latency, message = tcp_probe(host, port)
         latency = latency or tcp_latency
         if not ok:
-            node.update({"probe_status": "unavailable", "probe_message": message, "latency_ms": latency, "probed_at": now_ts()})
+            node.update({"probe_status": "blacklisted", "probe_message": f"检测不可用，已自动屏蔽：{message}", "latency_ms": latency, "probed_at": now_ts()})
+            blacklist_node(node, message, data_dir)
             return node
     if openvpn:
         ok, message = run_openvpn_probe(node, dev=dev, data_dir=data_dir)
     else:
-        ok, message = True, "basic probe ok"
+        ok, message = True, "基础连通性检测通过"
     node.update({
-        "probe_status": "available" if ok else "unavailable",
-        "probe_message": message,
+        "probe_status": "available" if ok else "blacklisted",
+        "probe_message": message if ok else f"检测不可用，已自动屏蔽：{message}",
         "latency_ms": latency,
         "probed_at": now_ts(),
     })
+    if not ok:
+        blacklist_node(node, message, data_dir)
     return node
 
 
 def check_nodes(data_dir: Path = DATA_DIR, limit: int | None = None, openvpn: bool = False) -> list[dict[str, Any]]:
     nodes = load_nodes(data_dir)
     limit = limit or int(os.getenv("TARGET_VALID_NODES", str(TARGET_VALID_NODES)))
+    blacklist = load_blacklist(data_dir)
+    for node in nodes:
+        blocked = blacklist.get(str(node.get("ip", "")))
+        if blocked:
+            node["probe_status"] = "blacklisted"
+            node["probe_message"] = f"已自动屏蔽：{blocked.get('reason', '检测不可用')}"
     candidates = [n for n in nodes if n.get("probe_status") != "blacklisted"][: int(os.getenv("MAX_SCAN_ROWS", str(MAX_SCAN_ROWS)))]
     checked: dict[str, dict[str, Any]] = {}
     max_workers = min(8, max(1, limit * 2))
@@ -612,9 +665,9 @@ def check_nodes(data_dir: Path = DATA_DIR, limit: int | None = None, openvpn: bo
     merged = [checked.get(n["id"], n) for n in nodes]
     save_nodes(merged, data_dir)
     state = load_state(data_dir)
-    state["last_check_message"] = f"Checked {len(checked)} nodes, available {sum(1 for n in merged if n.get('probe_status') == 'available')}"
+    state["last_check_message"] = f"已检测 {len(checked)} 个节点，可用 {sum(1 for n in merged if n.get('probe_status') == 'available')} 个，已屏蔽 {sum(1 for n in merged if n.get('probe_status') == 'blacklisted')} 个"
     save_state(state, data_dir)
-    logger.write("INFO", "VPN", "Node check completed", checked=len(checked))
+    logger.write("INFO", "节点", "节点检测完成", checked=len(checked))
     return merged
 
 
@@ -649,7 +702,7 @@ def configure_policy_routing(dev: str = "tun0") -> None:
     for cmd in cmds:
         proc = run_cmd(cmd, timeout=10)
         if proc.returncode not in (0, 2):
-            logger.write("WARNING", "Routing", "Routing command failed", command=" ".join(cmd), stderr=proc.stderr.strip())
+            logger.write("WARNING", "路由", "策略路由命令执行失败", command=" ".join(cmd), stderr=proc.stderr.strip())
 
 
 def cleanup_policy_routing() -> None:
@@ -668,9 +721,11 @@ def connect_node(node_id: str, data_dir: Path = DATA_DIR) -> tuple[bool, str]:
     nodes = load_nodes(data_dir)
     node = next((n for n in nodes if n.get("id") == node_id), None)
     if not node:
-        return False, "node not found"
+        return False, "节点不存在"
+    if node.get("probe_status") == "blacklisted" or str(node.get("ip", "")) in load_blacklist(data_dir):
+        return False, "该节点已被屏蔽，已跳过连接"
     if shutil.which(os.getenv("OPENVPN_CMD", OPENVPN_CMD)) is None:
-        return False, "openvpn is not installed"
+        return False, "未安装 openvpn"
     state = load_state(data_dir)
     state["is_connecting"] = True
     save_state(state, data_dir)
@@ -703,12 +758,12 @@ def connect_node(node_id: str, data_dir: Path = DATA_DIR) -> tuple[bool, str]:
         return False, str(exc)
     deadline = time.time() + int(os.getenv("OPENVPN_TEST_TIMEOUT_SECONDS", str(OPENVPN_TEST_TIMEOUT_SECONDS)))
     ok = False
-    message = "OpenVPN initialization timed out"
+    message = "OpenVPN 初始化超时"
     try:
         while time.time() < deadline:
             text = log_file.read_text(encoding="utf-8", errors="replace")[-20000:]
             ok, message = classify_openvpn_log(text)
-            if ok or message != "OpenVPN initialization timed out":
+            if ok or message != "OpenVPN 初始化超时":
                 break
             if proc.poll() is not None:
                 break
@@ -722,12 +777,19 @@ def connect_node(node_id: str, data_dir: Path = DATA_DIR) -> tuple[bool, str]:
         save_nodes(nodes, data_dir)
         state.update({"active_openvpn_node_id": node_id, "is_connecting": False})
         save_state(state, data_dir)
-        logger.write("INFO", "VPN", "Connected node", node_id=node_id)
+        logger.write("INFO", "连接", "节点连接成功", node_id=node_id)
         return True, message
     terminate_pid_file(data_dir / "openvpn.pid")
+    for n in nodes:
+        if n.get("id") == node_id:
+            n["probe_status"] = "blacklisted"
+            n["probe_message"] = f"连接失败，已自动屏蔽：{message}"
+            n["active"] = False
+            blacklist_node(n, message, data_dir)
+    save_nodes(nodes, data_dir)
     state["is_connecting"] = False
     save_state(state, data_dir)
-    logger.write("ERROR", "VPN", "OpenVPN connection failed", node_id=node_id, error=message)
+    logger.write("ERROR", "连接", "OpenVPN 连接失败，节点已自动屏蔽", node_id=node_id, error=message)
     return False, message
 
 
@@ -759,17 +821,18 @@ def disconnect_current(data_dir: Path = DATA_DIR, update_state: bool = True) -> 
         state = load_state(data_dir)
         state.update({"active_openvpn_node_id": "", "is_connecting": False})
         save_state(state, data_dir)
-    logger.write("INFO", "VPN", "Disconnected current node")
+    logger.write("INFO", "连接", "已断开当前节点")
 
 
 def select_best_node(data_dir: Path = DATA_DIR) -> dict[str, Any] | None:
     state = load_state(data_dir)
     nodes = load_nodes(data_dir)
-    available = [n for n in nodes if n.get("probe_status") == "available"]
+    blocked_ips = set(load_blacklist(data_dir))
+    available = [n for n in nodes if n.get("probe_status") == "available" and str(n.get("ip", "")) not in blocked_ips]
     mode = state.get("routing_mode", "auto")
     if mode == "fixed_ip":
         wanted = state.get("fixed_node_id")
-        return next((n for n in nodes if n.get("id") == wanted and n.get("probe_status") == "available"), None)
+        return next((n for n in available if n.get("id") == wanted), None)
     if mode == "fixed_region":
         country = str(state.get("force_country", "")).upper()
         available = [n for n in available if n.get("country_short") == country]
