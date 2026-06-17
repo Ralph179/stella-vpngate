@@ -67,6 +67,7 @@ mkdir -p "$INSTALL_DIR/data/logs" "$INSTALL_DIR/data/configs"
 chmod 700 "$INSTALL_DIR/data"
 cp "$INSTALL_DIR/systemd/stella-vpngate.service" "$SERVICE_FILE"
 chmod 644 "$SERVICE_FILE"
+rm -f /usr/bin/stella-vpn
 cat > /usr/bin/stella-vpn <<EOF
 #!/usr/bin/env sh
 exec python3 "$INSTALL_DIR/cli.py" "\$@"
