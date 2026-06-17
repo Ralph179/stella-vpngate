@@ -360,7 +360,20 @@ def parse_int(value: Any, default: int = 0) -> int:
 
 def parse_vpngate_csv(csv_text: str, data_dir: Path = DATA_DIR, max_rows: int = MAX_SCAN_ROWS) -> list[dict[str, Any]]:
     ensure_dirs(data_dir)
-    lines = [line for line in csv_text.splitlines() if line and not line.startswith("*") and not line.startswith("#")]
+    lines: list[str] = []
+    header_seen = False
+    for raw_line in csv_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("*"):
+            continue
+        if line.startswith("#"):
+            header = line.lstrip("#")
+            if header.startswith("HostName,") and "OpenVPN_ConfigData_Base64" in header:
+                lines.append(header)
+                header_seen = True
+            continue
+        if header_seen:
+            lines.append(line)
     reader = csv.DictReader(lines)
     seen: set[str] = set()
     nodes: list[dict[str, Any]] = []
