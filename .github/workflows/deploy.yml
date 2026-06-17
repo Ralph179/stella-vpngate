@@ -46,8 +46,11 @@ jobs:
           fi
           python3 -m compileall stella_vpngate.py proxy_server.py vpn_utils.py cli.py
           install -m 644 systemd/stella-vpngate.service /etc/systemd/system/stella-vpngate.service
-          ln -sf "$DEPLOY_PATH/cli.py" /usr/bin/stella-vpn
-          chmod +x "$DEPLOY_PATH/cli.py" "$DEPLOY_PATH/stella_vpngate.py" /usr/bin/stella-vpn
+          cat > /usr/bin/stella-vpn <<EOF
+          #!/usr/bin/env sh
+          exec python3 "$DEPLOY_PATH/cli.py" "\$@"
+          EOF
+          chmod 755 /usr/bin/stella-vpn
           systemctl daemon-reload
           systemctl restart stella-vpngate
           systemctl status stella-vpngate --no-pager
